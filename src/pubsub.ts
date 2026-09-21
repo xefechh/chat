@@ -1,5 +1,5 @@
 import { createClient, RedisClientType } from "redis";
-import { ChatMessage } from "./types";
+import { ChatMessage, isChatMessage } from "./types";
 
 const CHANNEL = "global-chat:messages";
 type Client = ReturnType<typeof createClient>;
@@ -21,7 +21,11 @@ export class MessageBus {
     this.subscriber.on("error", (error) => console.error("Redis subscriber error:", error));
     await Promise.all([this.publisher.connect(), this.subscriber.connect()]);
     await this.subscriber.subscribe(CHANNEL, (payload) => {
-      try { onMessage(JSON.parse(payload) as ChatMessage); }
+      try {
+        const message: unknown = JSON.parse(payload);
+        if (isChatMessage(message)) onMessage(message);
+        else console.error("Rejected invalid Redis message");
+      }
       catch (error) { console.error("Invalid Redis message:", error); }
     });
   }
