@@ -57,9 +57,7 @@ function broadcast(message: ChatMessage): void {
   }
 }
 
-app.get("/health", (_req, res) => res.json({
-  status: "ok", redis: bus.configured, firestore: store.configured
-}));
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
 app.get("/api/messages", async (req, res) => {
   sessionValue(req, res);
