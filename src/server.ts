@@ -1,5 +1,8 @@
 import "dotenv/config";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import express, { Request, Response } from "express";
 import path from "node:path";
 import { MessageBus } from "./pubsub";
@@ -94,7 +97,15 @@ app.get("/api/events", (req, res) => {
 
 const port = Number(process.env.PORT ?? 3000);
 bus.connect(broadcast).catch((error) => console.error("Redis connection failed:", error));
-const server = app.listen(port, () => console.log(`Chat listening on port ${port}`));
+const keyPath = process.env.HTTPS_KEY_PATH;
+const certPath = process.env.HTTPS_CERT_PATH;
+if (process.env.NODE_ENV === "production" && (!keyPath || !certPath)) {
+  throw new Error("HTTPS_KEY_PATH and HTTPS_CERT_PATH must be configured in production");
+}
+const server = keyPath && certPath
+  ? https.createServer({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }, app)
+  : http.createServer(app);
+server.listen(port, () => console.log(`Chat listening on port ${port}`));
 async function shutdown() { await bus.close().catch(() => undefined); server.close(() => process.exit(0)); }
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
