@@ -10,12 +10,34 @@ const app = express();
 const store = new MessageStore();
 const bus = new MessageBus(process.env.REDIS_URL ?? "");
 const clients = new Set<Response>();
+const sessionSecret = process.env.SESSION_SECRET ?? (() => {
+  throw new Error("SESSION_SECRET must be configured");
+})();
 
 app.use(express.json({ limit: "8kb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 function anonymousName(): string {
   return `Anonymous-${crypto.randomBytes(3).toString("hex")}`;
+}
+
+function signedSession(value: string): string {
+  const signature = crypto.createHmac("sha256", sessionSecret).update(value).digest("hex");
+  return `${value}.${signature}`;
+}
+
+function sessionValue(req: Request, res: Response): string {
+  const raw = req.header("cookie")?.match(/(?:^|;\s*)chat_session=([^;]+)/)?.[1];
+  if (raw) {
+    const [value, signature] = raw.split(".");
+    const expected = crypto.createHmac("sha256", sessionSecret).update(value ?? "").digest("hex");
+    if (value && signature && signature.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return value;
+  }
+  const value = anonymousName();
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `chat_session=${signedSession(value)}; Max-Age=31536000; HttpOnly; SameSite=Lax${secure}`);
+  return value;
 }
 
 function validInput(body: unknown): body is PublishMessage {
@@ -36,7 +58,8 @@ app.get("/health", (_req, res) => res.json({
   status: "ok", redis: bus.configured, firestore: store.configured
 }));
 
-app.get("/api/messages", async (_req, res) => {
+app.get("/api/messages", async (req, res) => {
+  sessionValue(req, res);
   try { res.json(await store.list()); }
   catch (error) {
     console.error("Firestore read failed:", error);
@@ -48,7 +71,7 @@ app.post("/api/messages", async (req: Request, res: Response) => {
   if (!validInput(req.body)) return res.status(400).json({ error: "text is required and must be at most 2000 characters" });
   const input = req.body;
   const message: ChatMessage = {
-    id: crypto.randomUUID(), displayName: input.displayName?.trim() || anonymousName(),
+    id: crypto.randomUUID(), displayName: sessionValue(req, res),
     text: input.text.trim(), createdAt: new Date().toISOString()
   };
   try {
@@ -62,6 +85,7 @@ app.post("/api/messages", async (req: Request, res: Response) => {
 });
 
 app.get("/api/events", (req, res) => {
+  sessionValue(req, res);
   res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   res.flushHeaders();
   clients.add(res);
